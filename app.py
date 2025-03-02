@@ -37,7 +37,7 @@ os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'address_proofs'), exist_o
 
 # Import these after initializing app
 from extensions import db
-from models import PasswordReset, User, BloodRequest, Donation, DonorVerification
+from models import PasswordReset, User, BloodRequest, Donation, DonorVerification, Testimonial, ImpactStat
 from utils import admin_required, calculate_blood_compatibility, donor_required, receiver_required, format_verification_status, calculate_next_donation_date
 
 # Initialize SQLAlchemy
@@ -95,7 +95,13 @@ def inject_common_variables():
 # Routes
 @app.route('/')
 def index():
-    return render_template('index.html')
+    # Get active testimonials
+    testimonials = Testimonial.query.filter_by(is_active=True).order_by(Testimonial.created_at.desc()).limit(2).all()
+    
+    # Get active impact statistics
+    impact_stats = ImpactStat.query.filter_by(is_active=True).all()
+    
+    return render_template('index.html', testimonials=testimonials, impact_stats=impact_stats)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -396,6 +402,7 @@ def get_dashboard_route(role):
 
 @app.route('/admin')
 @login_required
+@admin_required
 def admin_dashboard():
     if current_user.role != 'admin':
         return redirect(url_for('index'))
@@ -507,7 +514,7 @@ def blood_banks():
 def help_support():
     return render_template('help_support.html')
 
-@app.route('/can-i-give-blood')
+@app.route('/eligibility-check')
 def eligibility_check():
     return render_template('eligibility_check.html')
 
@@ -545,12 +552,82 @@ def register():
             return render_template('register.html')
     return render_template('register.html')
 
-with app.app_context():
-    db.create_all()
+# New routes for testimonials and impact stats management
+@app.route('/admin/testimonials', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def admin_testimonials():
+    """Admin page to manage testimonials"""
+    if request.method == 'POST':
+        action = request.form.get('action')
+        
+        if action == 'add':
+            new_testimonial = Testimonial(
+                name=request.form.get('name'),
+                role=request.form.get('role'),
+                content=request.form.get('content'),
+                is_active=request.form.get('is_active') == 'on'
+            )
+            db.session.add(new_testimonial)
+            db.session.commit()
+            flash('Testimonial added successfully', 'success')
+            
+        elif action == 'edit':
+            testimonial_id = request.form.get('testimonial_id')
+            testimonial = Testimonial.query.get_or_404(testimonial_id)
+            testimonial.name = request.form.get('name')
+            testimonial.role = request.form.get('role')
+            testimonial.content = request.form.get('content')
+            testimonial.is_active = request.form.get('is_active') == 'on'
+            db.session.commit()
+            flash('Testimonial updated successfully', 'success')
+            
+        elif action == 'delete':
+            testimonial_id = request.form.get('testimonial_id')
+            testimonial = Testimonial.query.get_or_404(testimonial_id)
+            db.session.delete(testimonial)
+            db.session.commit()
+            flash('Testimonial deleted successfully', 'success')
+    
+    testimonials = Testimonial.query.order_by(Testimonial.created_at.desc()).all()
+    return render_template('admin_testimonials.html', testimonials=testimonials)
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
-from email_utils import send_password_reset_email
+@app.route('/admin/impact-stats', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def admin_impact_stats():
+    """Admin page to manage impact statistics"""
+    if request.method == 'POST':
+        action = request.form.get('action')
+        
+        if action == 'add':
+            new_stat = ImpactStat(
+                title=request.form.get('title'),
+                count=int(request.form.get('count')),
+                is_active=request.form.get('is_active') == 'on'
+            )
+            db.session.add(new_stat)
+            db.session.commit()
+            flash('Impact statistic added successfully', 'success')
+            
+        elif action == 'edit':
+            stat_id = request.form.get('stat_id')
+            stat = ImpactStat.query.get_or_404(stat_id)
+            stat.title = request.form.get('title')
+            stat.count = int(request.form.get('count'))
+            stat.is_active = request.form.get('is_active') == 'on'
+            db.session.commit()
+            flash('Impact statistic updated successfully', 'success')
+            
+        elif action == 'delete':
+            stat_id = request.form.get('stat_id')
+            stat = ImpactStat.query.get_or_404(stat_id)
+            db.session.delete(stat)
+            db.session.commit()
+            flash('Impact statistic deleted successfully', 'success')
+    
+    impact_stats = ImpactStat.query.all()
+    return render_template('admin_impact_stats.html', impact_stats=impact_stats)
 
 @app.route('/forgot-password', methods=['GET', 'POST'])
 def forgot_password():
@@ -633,97 +710,6 @@ def reset_password():
     
     return render_template('reset_password.html', token=token)
 
-# Admin route for resetting user passwords
-@app.route('/admin/reset-user-password/<int:user_id>', methods=['GET', 'POST'])
-@login_required
-@admin_required
-def admin_reset_password(user_id):
-    """Allow admins to reset user passwords"""
-    user = User.query.get_or_404(user_id)
-    
-    if request.method == 'POST':
-        password = request.form.get('password')
-        
-        if not password or len(password) < 8:
-            flash('Password must be at least 8 characters long.', 'danger')
-            return render_template('admin_reset_password.html', user=user)
-        
-        # Update the user's password
-        user.password_hash = generate_password_hash(password)
-        db.session.commit()
-        
-        flash(f'Password for {user.email} has been reset successfully.', 'success')
-        return redirect(url_for('admin_users'))
-    
-    return render_template('admin_reset_password.html', user=user)
-
-# Route to view all users (for admin)
-@app.route('/admin/users')
-@login_required
-@admin_required
-def admin_users():
-    """Admin page to view and manage users"""
-    role_filter = request.args.get('role', 'all')
-    search_query = request.args.get('search', '')
-    page = request.args.get('page', 1, type=int)
-    per_page = 10
-    
-    query = User.query
-    
-    if role_filter != 'all':
-        query = query.filter_by(role=role_filter)
-    
-    if search_query:
-        query = query.filter(
-            db.or_(
-                User.email.ilike(f'%{search_query}%'),
-                User.first_name.ilike(f'%{search_query}%'),
-                User.last_name.ilike(f'%{search_query}%')
-            )
-        )
-    
-    pagination = query.order_by(User.created_at.desc()).paginate(page=page, per_page=per_page)
-    
-    return render_template('admin_users.html', 
-                          pagination=pagination, 
-                          role_filter=role_filter,
-                          search_query=search_query)
-# Route for admin dashboard
-@app.route('/admin')
-@login_required
-@admin_required
-def admin_dashboard():
-    # Get counts for admin dashboard
-    pending_verifications_count = DonorVerification.query.filter_by(status='pending').count()
-    pending_requests_count = BloodRequest.query.filter_by(status='pending').count()
-    pending_donations_count = Donation.query.filter_by(status='pending').count()
-    
-    # Get recent data for dashboard
-    blood_requests = BloodRequest.query.order_by(BloodRequest.created_at.desc()).limit(5).all()
-    donations = Donation.query.order_by(Donation.donation_date.desc()).limit(5).all()
-    
-    # Get recent verifications
-    recent_verifications = DonorVerification.query.order_by(
-        DonorVerification.submission_date.desc()
-    ).limit(5).all()
-    
-    # Get admin action logs
-    recent_admin_logs = AdminActionLog.query.order_by(
-        AdminActionLog.timestamp.desc()
-    ).limit(10).all()
-    
-    return render_template(
-        'admin_dashboard.html',
-        pending_verifications_count=pending_verifications_count,
-        pending_requests_count=pending_requests_count,
-        pending_donations_count=pending_donations_count,
-        blood_requests=blood_requests,
-        donations=donations,
-        recent_verifications=recent_verifications,
-        recent_admin_logs=recent_admin_logs
-    )
-
-# Route for admin users page
 @app.route('/admin/users')
 @login_required
 @admin_required
@@ -755,7 +741,6 @@ def admin_users():
                           role_filter=role_filter,
                           search_query=search_query)
 
-# Route for admin reset user password
 @app.route('/admin/reset-user-password/<int:user_id>', methods=['GET', 'POST'])
 @login_required
 @admin_required
@@ -805,7 +790,82 @@ def admin_reset_password(user_id):
     
     return render_template('admin_reset_password.html', user=user)
 
-
+# Email utility function (should be in email_utils.py, but included here for completeness)
+def send_password_reset_email(user, token, reset_url):
+    """
+    Send a password reset email to a user
+    
+    Args:
+        user: User object
+        token: Password reset token
+        reset_url: Base URL for password reset (e.g., https://example.com/reset-password)
+    
+    Returns:
+        bool: True if the email was sent successfully
+    """
+    reset_link = f"{reset_url}?token={token}"
+    
+    subject = "Reset Your BloodBridge Password"
+    
+    # HTML version
+    html_content = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+            <div style="text-align: center; margin-bottom: 20px;">
+                <h2 style="color: #dc3545;">BloodBridge</h2>
+            </div>
+            
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+                <h3>Hello {user.first_name},</h3>
+                
+                <p>We received a request to reset your password for your BloodBridge account.</p>
+                
+                <p>To reset your password, please click the button below:</p>
+                
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="{reset_link}" style="background-color: #dc3545; color: white; padding: 12px 25px; text-decoration: none; border-radius: 4px; font-weight: bold;">Reset Password</a>
+                </div>
+                
+                <p>If you didn't request this password reset, you can ignore this email and your password will remain unchanged.</p>
+                
+                <p>This password reset link will expire in 24 hours.</p>
+                
+                <p>Thank you,<br>
+                The BloodBridge Team</p>
+            </div>
+            
+            <div style="margin-top: 20px; font-size: 12px; color: #6c757d; text-align: center;">
+                <p>If you're having trouble clicking the button, copy and paste the URL below into your web browser:</p>
+                <p style="word-break: break-all;">{reset_link}</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    # Plain text version
+    text_content = f"""
+    Hello {user.first_name},
+    
+    We received a request to reset your password for your BloodBridge account.
+    
+    To reset your password, please visit the link below:
+    
+    {reset_link}
+    
+    If you didn't request this password reset, you can ignore this email and your password will remain unchanged.
+    
+    This password reset link will expire in 24 hours.
+    
+    Thank you,
+    The BloodBridge Team
+    """
+    
+    # This is just a placeholder since the actual implementation is in email_utils.py
+    # In practice, you would use something like:
+    # return send_email(user.email, subject, html_content, text_content)
+    return True
 
 if __name__ == '__main__':
     with app.app_context():

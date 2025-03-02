@@ -179,3 +179,17 @@ class AdminActionLog(db.Model):
     # Relationships
     admin = db.relationship('User', foreign_keys=[admin_id])
     target_user = db.relationship('User', foreign_keys=[target_user_id])
+class Testimonial(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    role = db.Column(db.String(100), nullable=False)  # e.g., "Donor", "Recipient"
+    content = db.Column(db.Text, nullable=False)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class ImpactStat(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(100), nullable=False)  # e.g., "Lives Saved"
+    count = db.Column(db.Integer, nullable=False)
+    is_active = db.Column(db.Boolean, default=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

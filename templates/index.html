@@ -89,30 +89,18 @@
         </div>
     </div>
     <div class="row">
-        <div class="col-md-3 mb-4">
-            <div class="counter-box">
-                <div class="counter" data-count="5000">0</div>
-                <div class="counter-title">Donors Registered</div>
+        {% for stat in impact_stats %}
+            <div class="col-md-{{ 12 // impact_stats|length }} mb-4">
+                <div class="counter-box">
+                    <div class="counter" data-count="{{ stat.count }}">0</div>
+                    <div class="counter-title">{{ stat.title }}</div>
+                </div>
             </div>
-        </div>
-        <div class="col-md-3 mb-4">
-            <div class="counter-box">
-                <div class="counter" data-count="15000">0</div>
-                <div class="counter-title">Lives Saved</div>
+        {% else %}
+            <div class="col-12 text-center">
+                <p class="text-muted">Impact statistics will be available soon.</p>
             </div>
-        </div>
-        <div class="col-md-3 mb-4">
-            <div class="counter-box">
-                <div class="counter" data-count="200">0</div>
-                <div class="counter-title">Blood Banks</div>
-            </div>
-        </div>
-        <div class="col-md-3 mb-4">
-            <div class="counter-box">
-                <div class="counter" data-count="1200">0</div>
-                <div class="counter-title">Successful Matches</div>
-            </div>
-        </div>
+        {% endfor %}
     </div>
 </div>
 
@@ -170,45 +158,30 @@
         </div>
     </div>
     <div class="row">
-        <div class="col-md-6 mb-4">
-            <div class="card testimonial-card h-100">
-                <div class="card-body">
-                    <p class="mb-3">
-                        "I've been donating blood for years, but BloodBridge made the process so much easier. 
-                        The reminders are helpful, and knowing my blood has directly saved lives is incredibly fulfilling."
-                    </p>
-                    <div class="d-flex align-items-center">
-                        <div class="bg-danger rounded-circle text-white p-3 me-3">
-                            <i class="fas fa-user"></i>
-                        </div>
-                        <div>
-                            <h6 class="mb-0">Sarah Johnson</h6>
-                            <small class="text-muted">Regular Donor</small>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-6 mb-4">
-            <div class="card testimonial-card h-100">
-                <div class="card-body">
-                    <p class="mb-3">
-                        "When my son needed emergency blood transfusion after an accident, 
-                        BloodBridge helped us find donors quickly. The response from the community was overwhelming. 
-                        Forever grateful."
-                    </p>
-                    <div class="d-flex align-items-center">
-                        <div class="bg-danger rounded-circle text-white p-3 me-3">
-                            <i class="fas fa-user"></i>
-                        </div>
-                        <div>
-                            <h6 class="mb-0">Michael Rodriguez</h6>
-                            <small class="text-muted">Recipient Family</small>
+        {% for testimonial in testimonials %}
+            <div class="col-md-6 mb-4">
+                <div class="card testimonial-card h-100">
+                    <div class="card-body">
+                        <p class="mb-3">
+                            "{{ testimonial.content }}"
+                        </p>
+                        <div class="d-flex align-items-center">
+                            <div class="bg-danger rounded-circle text-white p-3 me-3">
+                                <i class="fas fa-user"></i>
+                            </div>
+                            <div>
+                                <h6 class="mb-0">{{ testimonial.name }}</h6>
+                                <small class="text-muted">{{ testimonial.role }}</small>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
+        {% else %}
+            <div class="col-12 text-center">
+                <p class="text-muted">Testimonials will be available soon.</p>
+            </div>
+        {% endfor %}
     </div>
 </div>
 
