@@ -193,3 +193,30 @@ class ImpactStat(db.Model):
     count = db.Column(db.Integer, nullable=False)
     is_active = db.Column(db.Boolean, default=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class Notification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    type = db.Column(db.String(50), nullable=False)  # 'info', 'success', 'warning', 'danger'
+    link = db.Column(db.String(200))  # Optional link for the notification
+    is_read = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationship
+    user = db.relationship('User', backref='notifications')
+    
+    @staticmethod
+    def create_notification(user_id, title, message, type='info', link=None):
+        """Helper method to create a new notification"""
+        notification = Notification(
+            user_id=user_id,
+            title=title,
+            message=message,
+            type=type,
+            link=link
+        )
+        db.session.add(notification)
+        db.session.commit()
+        return notification

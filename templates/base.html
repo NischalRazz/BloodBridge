@@ -66,6 +66,7 @@
                             <li><a class="dropdown-item" href="{{ url_for('eligibility_check') }}">Can I Give Blood?</a></li>
                             <li><a class="dropdown-item" href="{{ url_for('blood_banks') }}">Blood Banks</a></li>
                             <li><a class="dropdown-item" href="{{ url_for('faq') }}">FAQs</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('test_notifications') }}">Test Notifications</a></li>
                         </ul>
                     </li>
                     <li class="nav-item dropdown">
@@ -95,6 +96,45 @@
                         <a class="btn btn-outline-danger me-2" href="{{ url_for('login') }}">Login</a>
                         <a class="btn btn-danger" href="{{ url_for('register') }}">Register</a>
                     {% endif %}
+                    {% if current_user.is_authenticated %}
+                    <div class="nav-item dropdown me-3">
+                        <a class="nav-link position-relative" href="#" id="notificationDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="fas fa-bell"></i>
+                            {% if unread_notifications %}
+                                <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
+                                    {{ unread_notifications|length }}
+                                </span>
+                            {% endif %}
+                        </a>
+                        <div class="dropdown-menu dropdown-menu-end notification-dropdown" aria-labelledby="notificationDropdown">
+                            <div class="dropdown-header d-flex justify-content-between align-items-center">
+                                <h6 class="mb-0">Notifications</h6>
+                                {% if unread_notifications %}
+                                    <a href="{{ url_for('mark_all_read') }}" class="text-decoration-none small">Mark all read</a>
+                                {% endif %}
+                            </div>
+                            <div class="notification-list" style="max-height: 300px; overflow-y: auto;">
+                                {% if recent_notifications %}
+                                    {% for notification in recent_notifications %}
+                                        <a href="{{ notification.link or '#' }}" class="dropdown-item notification-item {% if not notification.is_read %}unread{% endif %}">
+                                            <!-- Rest of the notification item code -->
+                                        </a>
+                                    {% endfor %}
+                                    {% if recent_notifications|length >= 5 %}
+                                        <a href="{{ url_for('notifications') }}" class="dropdown-item text-center">
+                                            View all notifications
+                                        </a>
+                                    {% endif %}
+                                {% else %}
+                                    <div class="dropdown-item text-center text-muted py-3">
+                                        <i class="fas fa-bell-slash mb-2"></i>
+                                        <p class="mb-0">No notifications</p>
+                                    </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                {% endif %}
                 </div>
             </div>
         </div>
@@ -178,5 +218,60 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
     {% block extra_scripts %}{% endblock %}
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div id="notificationToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header">
+                <i class="fas fa-bell text-danger me-2"></i>
+                <strong class="me-auto" id="toastTitle"></strong>
+                <small id="toastTime">just now</small>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body" id="toastMessage"></div>
+        </div>
+    </div>
+    
+    <script>
+    // Function to show a notification toast
+    function showNotificationToast(title, message, type = 'info') {
+        const toast = document.getElementById('notificationToast');
+        const toastTitle = document.getElementById('toastTitle');
+        const toastMessage = document.getElementById('toastMessage');
+        
+        // Set content
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        
+        // Remove existing color classes and add new one
+        toast.className = 'toast';
+        toast.classList.add('bg-light');
+        toast.classList.add('border-' + type);
+        
+        // Show the toast
+        const bsToast = new bootstrap.Toast(toast);
+        bsToast.show();
+    }
+    
+    // Function to update notification badge
+    function updateNotificationBadge(count) {
+        const dropdown = document.getElementById('notificationDropdown');
+        if (!dropdown) return;
+        
+        let badge = dropdown.querySelector('.badge');
+        
+        if (count > 0) {
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger notification-badge-new';
+                dropdown.appendChild(badge);
+            }
+            badge.textContent = count;
+        } else if (badge) {
+            badge.remove();
+        }
+    }
+    
+    // Example usage: Show a notification when a new blood request matches
+    // showNotificationToast('Blood Request Match', 'A new blood request matches your blood type!', 'danger');
+    </script>
 </body>
 </html>

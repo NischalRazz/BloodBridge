@@ -3,7 +3,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta
-from flask import Flask, abort, render_template, request, redirect, url_for, flash, session, send_from_directory
+from flask import Flask, abort, jsonify, render_template, request, redirect, url_for, flash, session, send_from_directory
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
@@ -37,8 +37,8 @@ os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'address_proofs'), exist_o
 
 # Import these after initializing app
 from extensions import db
-from models import PasswordReset, User, BloodRequest, Donation, DonorVerification, Testimonial, ImpactStat
-from utils import admin_required, calculate_blood_compatibility, donor_required, receiver_required, format_verification_status, calculate_next_donation_date
+from models import User, BloodRequest, Donation, DonorVerification, Testimonial, ImpactStat, Notification
+from utils import admin_required, calculate_blood_compatibility, donor_required, log_admin_action, receiver_required, format_verification_status, calculate_next_donation_date, validate_password_complexity
 
 # Initialize SQLAlchemy
 db.init_app(app)
@@ -237,8 +237,16 @@ def verify_donor():
             current_user.verification_status = 'pending'
             
             db.session.add(verification)
-            db.session.commit()
             
+            # Notify all admins about new verification
+            admins = User.query.filter_by(role='admin').all()
+            for admin in admins:
+                notification_handlers['admin_verification'](
+                    admin.id,
+                    f"{current_user.first_name} {current_user.last_name}"
+                )
+            
+            db.session.commit()
             flash('Your verification documents have been submitted and will be reviewed shortly.', 'success')
             return redirect(url_for('verification_status'))
             
@@ -280,51 +288,51 @@ def admin_verifications():
     
     return render_template('admin_verifications.html', pagination=pagination, status_filter=status_filter)
 
-@app.route('/admin/review-verification/<int:verification_id>', methods=['GET', 'POST'])
+@app.route('/admin/review-verification/<int:verification_id>', methods=['POST'])
 @login_required
 @admin_required
 def review_verification(verification_id):
-    """Admin page to review a specific verification"""
-    verification = DonorVerification.query.get_or_404(verification_id)
-    donor = User.query.get(verification.donor_id)
+    try:
+        verification = DonorVerification.query.get_or_404(verification_id)
+        action = request.form.get('action')
+        notes = request.form.get('notes')
+        
+        if action == 'approve':
+            verification.status = 'approved'
+            verification.donor.verification_status = 'approved'
+            verification.donor.is_verified = True
+            
+            # Notify donor of approval
+            notification_handlers['donor_verification_result'](
+                verification.donor_id,
+                'approved'
+            )
+            
+        elif action == 'reject':
+            verification.status = 'rejected'
+            verification.donor.verification_status = 'rejected'
+            verification.donor.is_verified = False
+            
+            # Notify donor of rejection
+            notification_handlers['donor_verification_result'](
+                verification.donor_id,
+                'rejected'
+            )
+        
+        verification.reviewer_id = current_user.id
+        verification.review_date = datetime.utcnow()
+        verification.review_notes = notes
+        
+        db.session.commit()
+        flash(f'Verification has been {verification.status}.', 'success')
+        return redirect(url_for('admin_verifications'))
+        
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Verification review error: {str(e)}")
+        flash('An error occurred while reviewing the verification. Please try again.', 'danger')
+        return redirect(url_for('review_verification', verification_id=verification_id))
     
-    if request.method == 'POST':
-        try:
-            action = request.form.get('action')
-            notes = request.form.get('notes')
-            
-            if action not in ['approve', 'reject']:
-                flash('Invalid action.', 'danger')
-                return redirect(url_for('review_verification', verification_id=verification_id))
-            
-            verification.status = 'approved' if action == 'approve' else 'rejected'
-            verification.reviewer_id = current_user.id
-            verification.review_date = datetime.utcnow()
-            verification.review_notes = notes
-            
-            # Update user verification status
-            donor.verification_status = verification.status
-            if action == 'approve':
-                donor.is_verified = True
-                donor.verification_date = datetime.utcnow()
-            else:
-                donor.is_verified = False
-            
-            db.session.commit()
-            
-            flash(f'Verification has been {verification.status}.', 'success')
-            return redirect(url_for('admin_verifications'))
-            
-        except Exception as e:
-            db.session.rollback()
-            logging.error(f"Verification review error: {str(e)}")
-            flash('An error occurred while reviewing the verification. Please try again.', 'danger')
-    
-    # Parse questionnaire responses
-    questionnaire = json.loads(verification.questionnaire_responses) if verification.questionnaire_responses else {}
-    
-    return render_template('review_verification.html', verification=verification, donor=donor, questionnaire=questionnaire)
-
 @app.route('/view-document/<document_type>/<filename>')
 @login_required
 def view_document(document_type, filename):
@@ -454,22 +462,43 @@ def logout():
 def request_blood():
     if request.method == 'POST':
         try:
+            blood_type = request.form['blood_type']
+            urgency = request.form['urgency']
+            
+            # Create blood request
             blood_request = BloodRequest(
                 requester_id=current_user.id,
-                blood_type=request.form['blood_type'],
+                blood_type=blood_type,
                 units_needed=int(request.form['units']),
-                urgency=request.form['urgency'],
+                urgency=urgency,
                 hospital=request.form['hospital'],
                 notes=request.form.get('notes', ''),
                 required_by=datetime.strptime(request.form['required_by'], '%Y-%m-%d') if request.form.get('required_by') else None
             )
             db.session.add(blood_request)
+            
+            # Notify matching donors
+            notification_handlers['matching_donors'](
+                blood_request.id,
+                blood_type,
+                urgency
+            )
+            
+            # Notify admins
+            notification_handlers['admin_blood_request'](
+                blood_type,
+                urgency
+            )
+            
             db.session.commit()
             flash('Blood request created successfully!', 'success')
             return redirect(url_for('receiver_dashboard'))
+            
         except Exception as e:
+            db.session.rollback()
             logging.error(f"Blood request creation error: {str(e)}")
             flash('An error occurred while creating the request. Please try again.', 'danger')
+    
     return render_template('request_blood.html')
 
 @app.route('/blood-requests')
@@ -867,6 +896,266 @@ def send_password_reset_email(user, token, reset_url):
     # return send_email(user.email, subject, html_content, text_content)
     return True
 
+from datetime import datetime, timedelta
+import humanize
+
+# Add this template filter
+@app.template_filter('timeago')
+def timeago_filter(date):
+    """Convert datetime to "time ago" text"""
+    now = datetime.utcnow()
+    return humanize.naturaltime(now - date)
+
+# Add this to your context processor
+@app.context_processor
+def inject_notifications():
+    """Inject notifications into all templates"""
+    if current_user.is_authenticated:
+        # Get recent notifications for dropdown (limited to 5)
+        recent_notifications = Notification.query.filter_by(user_id=current_user.id)\
+            .order_by(Notification.created_at.desc())\
+            .limit(5).all()
+        
+        # Get unread notifications
+        unread_notifications = Notification.query.filter_by(
+            user_id=current_user.id,
+            is_read=False
+        ).all()
+        
+        return {
+            'recent_notifications': recent_notifications,  # For dropdown
+            'unread_notifications': unread_notifications  # For badge
+        }
+    return {}
+
+@app.route('/notifications')
+@login_required
+def notifications():
+    """View all notifications"""
+    page = request.args.get('page', 1, type=int)
+    per_page = 20
+    
+    notifications = Notification.query.filter_by(user_id=current_user.id)\
+        .order_by(Notification.created_at.desc())\
+        .paginate(page=page, per_page=per_page)
+    
+    return render_template('notifications.html', notifications=notifications)
+
+@app.route('/notifications/mark-read', methods=['POST'])
+@login_required
+def mark_all_read():
+    """Mark all notifications as read"""
+    try:
+        Notification.query.filter_by(
+            user_id=current_user.id,
+            is_read=False
+        ).update({'is_read': True})
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/notifications/<int:notification_id>/mark-read', methods=['POST'])
+@login_required
+def mark_notification_read(notification_id):
+    """Mark a specific notification as read"""
+    notification = Notification.query.get_or_404(notification_id)
+    
+    if notification.user_id != current_user.id:
+        abort(403)
+    
+    try:
+        notification.is_read = True
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)})
+
+# Example function to create notifications for different events
+def create_notification_for_event(event_type, user_id, **kwargs):
+    """Create notifications for different events"""
+    notifications = {
+        'verification_approved': {
+            'title': 'Verification Approved',
+            'message': 'Your donor verification has been approved! You can now start donating blood.',
+            'type': 'success',
+            'link': url_for('verification_status')
+        },
+        'verification_rejected': {
+            'title': 'Verification Rejected',
+            'message': 'Your donor verification was rejected. Please review the feedback and submit again.',
+            'type': 'danger',
+            'link': url_for('verification_status')
+        },
+        'blood_request_match': {
+            'title': 'Blood Request Match',
+            'message': f"Your blood type matches a {kwargs.get('urgency', 'new')} request.",
+            'type': 'info',
+            'link': url_for('blood_requests')
+        },
+        'donation_reminder': {
+            'title': 'Ready to Donate',
+            'message': 'You are now eligible to donate blood again!',
+            'type': 'success',
+            'link': url_for('donate')
+        },
+        'request_fulfilled': {
+            'title': 'Blood Request Fulfilled',
+            'message': 'Your blood request has been fulfilled!',
+            'type': 'success',
+            'link': url_for('blood_requests')
+        }
+    }
+    
+    if event_type in notifications:
+        notification_data = notifications[event_type]
+        Notification.create_notification(
+            user_id=user_id,
+            title=notification_data['title'],
+            message=notification_data['message'],
+            type=notification_data['type'],
+            link=notification_data['link']
+        )
+
+@app.route('/test-notifications')
+@login_required
+def test_notifications():
+    """Test page for notifications"""
+    recent_notifications = Notification.query.filter_by(user_id=current_user.id)\
+        .order_by(Notification.created_at.desc())\
+        .limit(5).all()
+    return render_template('test_notifications.html', recent_notifications=recent_notifications)
+
+@app.route('/create-test-notification', methods=['POST'])
+@login_required
+def create_test_notification():
+    """Create a test notification"""
+    notification_type = request.json.get('type', 'info')
+    
+    # Create different messages based on type
+    notifications = {
+        'info': {
+            'title': 'Info Notification',
+            'message': 'This is a test info notification.',
+            'link': url_for('notifications')
+        },
+        'success': {
+            'title': 'Success Notification',
+            'message': 'Your action was completed successfully!',
+            'link': url_for('notifications')
+        },
+        'warning': {
+            'title': 'Warning Notification',
+            'message': 'Please be aware of this important notice.',
+            'link': url_for('notifications')
+        },
+        'danger': {
+            'title': 'Urgent Notification',
+            'message': 'Immediate attention required!',
+            'link': url_for('notifications')
+        }
+    }
+    
+    notif_data = notifications.get(notification_type, notifications['info'])
+    
+    # Create the notification
+    notification = Notification.create_notification(
+        user_id=current_user.id,
+        title=notif_data['title'],
+        message=notif_data['message'],
+        type=notification_type,
+        link=notif_data['link']
+    )
+    
+    # Get unread count for badge update
+    unread_count = Notification.query.filter_by(
+        user_id=current_user.id,
+        is_read=False
+    ).count()
+    
+    return jsonify({
+        'success': True,
+        'notification': {
+            'title': notification.title,
+            'message': notification.message,
+            'type': notification.type
+        },
+        'unread_count': unread_count
+    })
+def create_notification_handlers():
+    """Set up notification handlers for specific events"""
+    
+    def notify_admin_new_verification(admin_id, donor_name):
+        """Notify admin about new verification request"""
+        Notification.create_notification(
+            user_id=admin_id,
+            title="New Verification Request",
+            message=f"New donor verification request from {donor_name}",
+            type="info",
+            link=url_for('admin_verifications')
+        )
+    
+    def notify_donor_verification_result(donor_id, status):
+        """Notify donor about verification result"""
+        if status == 'approved':
+            Notification.create_notification(
+                user_id=donor_id,
+                title="Verification Approved",
+                message="Your donor verification has been approved! You can now donate blood.",
+                type="success",
+                link=url_for('verification_status')
+            )
+        elif status == 'rejected':
+            Notification.create_notification(
+                user_id=donor_id,
+                title="Verification Rejected",
+                message="Your verification was rejected. Please check the feedback and submit again.",
+                type="danger",
+                link=url_for('verification_status')
+            )
+    
+    def notify_matching_donors(request_id, blood_type, urgency):
+        """Notify donors with matching blood type about new request"""
+        # Find all verified donors with matching blood type
+        matching_donors = User.query.filter_by(
+            role='donor',
+            blood_type=blood_type,
+            is_verified=True
+        ).all()
+        
+        # Notify each matching donor
+        for donor in matching_donors:
+            Notification.create_notification(
+                user_id=donor.id,
+                title="Blood Request Match",
+                message=f"New {urgency} blood request matching your blood type ({blood_type})",
+                type="info" if urgency == 'normal' else urgency,
+                link=url_for('blood_requests')
+            )
+    
+    def notify_admins_blood_request(blood_type, urgency):
+        """Notify all admins about new blood request"""
+        admins = User.query.filter_by(role='admin').all()
+        for admin in admins:
+            Notification.create_notification(
+                user_id=admin.id,
+                title="New Blood Request",
+                message=f"New {urgency} blood request for {blood_type}",
+                type="info" if urgency == 'normal' else urgency,
+                link=url_for('blood_requests')
+            )
+    
+    return {
+        'admin_verification': notify_admin_new_verification,
+        'donor_verification_result': notify_donor_verification_result,
+        'matching_donors': notify_matching_donors,
+        'admin_blood_request': notify_admins_blood_request
+    }
+
+# Initialize notification handlers
+notification_handlers = create_notification_handlers()
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()

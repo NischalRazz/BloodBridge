@@ -15,4 +15,5 @@ dependencies = [
     "qrcode>=8.0",
     "sqlalchemy>=2.0.38",
     "pillow>=11.1.0",
+    "humanize>=4.7.0",
 ]
